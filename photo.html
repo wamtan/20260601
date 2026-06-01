@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>撮影ページ</title>
+
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: sans-serif;
+}
+
+#camera {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 0;
+}
+
+#three {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+}
+
+#captureBtn {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 16px 30px;
+  border: none;
+  border-radius: 999px;
+  background: #0057ff;
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+}
+
+#switchBtn {
+  position: fixed;
+  right: 16px;
+  top: 16px;
+  z-index: 5;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 999px;
+  background: white;
+  color: #222;
+  font-size: 14px;
+}
+</style>
+</head>
+
+<body>
+
+<video id="camera" autoplay playsinline muted></video>
+<canvas id="three"></canvas>
+
+<button id="switchBtn">カメラ切替</button>
+<button id="captureBtn">撮影</button>
+
+<script type="module">
+import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import { GLTFLoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
+
+const video = document.getElementById("camera");
+const canvas = document.getElementById("three");
+const captureBtn = document.getElementById("captureBtn");
+const switchBtn = document.getElementById("switchBtn");
+
+let facingMode = "environment";
+let stream = null;
+
+async function startCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode },
+    audio: false
+  });
+
+  video.srcObject = stream;
+}
+
+startCamera().catch(err => {
+  alert("カメラを起動できません: " + err.message);
+});
+
+switchBtn.addEventListener("click", () => {
+  facingMode = facingMode === "environment" ? "user" : "environment";
+  startCamera();
+});
+
+// Three.js
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  alpha: true,
+  antialias: true,
+  preserveDrawingBuffer: true
+});
+
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+  45,
+  window.innerWidth / window.innerHeight,
+  0.01,
+  100
+);
+
+camera.position.set(0, 1.4, 4);
+
+const light1 = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+scene.add(light1);
+
+const light2 = new THREE.DirectionalLight(0xffffff, 1.5);
+light2.position.set(3, 5, 4);
+scene.add(light2);
+
+let model = null;
+
+const loader = new GLTFLoader();
+loader.load(
+  "character.glb",
+  gltf => {
+    model = gltf.scene;
+    model.position.set(0, -1, 0);
+    model.scale.set(1, 1, 1);
+    scene.add(model);
+  },
+  undefined,
+  err => {
+    alert("GLBを読み込めません: " + err.message);
+  }
+);
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+// 操作：一本指で回転、二本指で拡大縮小
+let lastX = 0;
+let lastDistance = 0;
+let isDragging = false;
+
+canvas.addEventListener("pointerdown", e => {
+  isDragging = true;
+  lastX = e.clientX;
+});
+
+canvas.addEventListener("pointermove", e => {
+  if (!isDragging || !model) return;
+  const dx = e.clientX - lastX;
+  model.rotation.y += dx * 0.01;
+  lastX = e.clientX;
+});
+
+canvas.addEventListener("pointerup", () => {
+  isDragging = false;
+});
+
+canvas.addEventListener("touchmove", e => {
+  if (!model) return;
+
+  if (e.touches.length === 2) {
+    e.preventDefault();
+
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (lastDistance > 0) {
+      const scaleChange = distance / lastDistance;
+      const newScale = model.scale.x * scaleChange;
+
+      const clamped = Math.min(Math.max(newScale, 0.2), 5);
+      model.scale.set(clamped, clamped, clamped);
+    }
+
+    lastDistance = distance;
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchend", () => {
+  lastDistance = 0;
+});
+
+// 撮影
+captureBtn.addEventListener("click", () => {
+  captureBtn.style.display = "none";
+  switchBtn.style.display = "none";
+
+  setTimeout(() => {
+    const output = document.createElement("canvas");
+    const ctx = output.getContext("2d");
+
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    output.width = w;
+    output.height = h;
+
+    ctx.drawImage(video, 0, 0, w, h);
+    ctx.drawImage(canvas, 0, 0, w, h);
+
+    const url = output.toDataURL("image/png");
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "photo.png";
+    a.click();
+
+    captureBtn.style.display = "block";
+    switchBtn.style.display = "block";
+  }, 100);
+});
+</script>
+
+</body>
+</html>
