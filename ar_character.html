@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<title>AR キャラクター</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Noto Sans JP', sans-serif; }
+#ar-wrap { position: fixed; inset: 0; }
+#video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#ar-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#tap-layer { position: absolute; inset: 0; }
+#flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+
+#hint {
+  position: absolute;
+  top: env(safe-area-inset-top, 16px); left: 50%; transform: translateX(-50%);
+  margin-top: 12px; background: rgba(0,0,0,0.5); color: #fff; font-size: 13px;
+  padding: 6px 18px; border-radius: 20px; white-space: nowrap;
+  pointer-events: none; backdrop-filter: blur(6px);
+}
+#bottom {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding-bottom: env(safe-area-inset-bottom, 12px); padding-top: 10px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.72));
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+#anim-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 0 12px; }
+.anim-btn {
+  background: rgba(255,255,255,0.15); border: 1.5px solid rgba(255,255,255,0.3);
+  color: #fff; border-radius: 20px; padding: 6px 16px; font-size: 13px;
+  font-family: inherit; cursor: pointer; transition: all 0.15s;
+}
+.anim-btn.active { background: #fff; color: #000; border-color: #fff; }
+#controls-row { display: flex; align-items: center; gap: 12px; padding: 0 16px; width: 100%; }
+#controls-row label { color: rgba(255,255,255,0.7); font-size: 12px; white-space: nowrap; }
+#scale-slider { flex: 1; accent-color: #fff; }
+#scale-val { color: #fff; font-size: 12px; min-width: 32px; }
+#shutter-row { display: flex; align-items: center; justify-content: center; gap: 28px; padding-bottom: 4px; }
+#shutter {
+  width: 64px; height: 64px; border-radius: 50%;
+  border: 4px solid #fff; background: rgba(255,255,255,0.2);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+#shutter svg { width: 26px; height: 26px; fill: #fff; }
+#clear-btn {
+  background: rgba(255,60,60,0.35); border: 1.5px solid rgba(255,100,100,0.5);
+  color: #fff; border-radius: 20px; padding: 8px 18px; font-size: 13px;
+  font-family: inherit; cursor: pointer;
+}
+#obj-badge {
+  background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.8);
+  border-radius: 20px; padding: 8px 14px; font-size: 13px; min-width: 56px; text-align: center;
+}
+#start-screen {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+}
+#start-btn {
+  background: #fff; color: #000; border: none; border-radius: 30px;
+  padding: 16px 40px; font-size: 17px; font-family: inherit; font-weight: 500; cursor: pointer;
+}
+#start-label { color: rgba(255,255,255,0.6); font-size: 14px; text-align: center; padding: 0 24px; line-height: 1.6; }
+#loading-overlay {
+  position: absolute; inset: 0; background: rgba(0,0,0,0.6);
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+}
+#loading-overlay span { color: #fff; font-size: 14px; }
+.spinner {
+  width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.2);
+  border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes rip { from { transform: scale(0.3); opacity: 1; } to { transform: scale(2.5); opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="ar-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="ar-canvas"></canvas>
+  <div id="tap-layer"></div>
+  <div id="flash"></div>
+
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <span id="loading-text">キャラクターを読み込み中...</span>
+  </div>
+
+  <div id="start-screen">
+    <button id="start-btn">カメラを起動</button>
+    <span id="start-label">character.glb をこのHTMLと<br>同じフォルダに置いてください</span>
+  </div>
+
+  <div id="hint" style="display:none">タップしてキャラクターを配置</div>
+
+  <div id="bottom" style="display:none">
+    <div id="anim-row"></div>
+    <div id="controls-row">
+      <label>サイズ</label>
+      <input type="range" id="scale-slider" min="0.1" max="3.0" value="1.0" step="0.05">
+      <span id="scale-val">1.00</span>
+    </div>
+    <div id="shutter-row">
+      <button id="clear-btn">消去</button>
+      <button id="shutter" aria-label="撮影">
+        <svg viewBox="0 0 24 24"><path d="M9 3L7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
+      </button>
+      <div id="obj-badge">0体</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+const video = document.getElementById('video');
+const arCanvas = document.getElementById('ar-canvas');
+const tapLayer = document.getElementById('tap-layer');
+const startScreen = document.getElementById('start-screen');
+const startBtn = document.getElementById('start-btn');
+const hint = document.getElementById('hint');
+const bottomBar = document.getElementById('bottom');
+const shutter = document.getElementById('shutter');
+const clearBtn = document.getElementById('clear-btn');
+const scaleSlider = document.getElementById('scale-slider');
+const scaleValEl = document.getElementById('scale-val');
+const objBadge = document.getElementById('obj-badge');
+const flashEl = document.getElementById('flash');
+const loadingOverlay = document.getElementById('loading-overlay');
+const loadingText = document.getElementById('loading-text');
+const animRow = document.getElementById('anim-row');
+
+let renderer, scene, camera, clock;
+let templateGltf = null;
+let placedObjects = [];
+let currentAnimIndex = 0;
+let animNames = [];
+let running = false;
+
+scaleSlider.addEventListener('input', () => {
+  scaleValEl.textContent = parseFloat(scaleSlider.value).toFixed(2);
+});
+
+startBtn.addEventListener('click', startCamera);
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    startScreen.style.display = 'none';
+    running = true;
+    initThree();
+    animate();
+    window.addEventListener('resize', onResize);
+    loadCharacter();
+  } catch(e) {
+    document.getElementById('start-label').textContent = 'カメラアクセスが拒否されました。\nブラウザの設定を確認してください。';
+  }
+}
+
+function initThree() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer = new THREE.WebGLRenderer({ canvas: arCanvas, alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(w, h);
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 1000);
+  camera.position.z = 5;
+  clock = new THREE.Clock();
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+  scene.add(ambient);
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(4, 8, 5);
+  scene.add(dir);
+  const fill = new THREE.DirectionalLight(0x8899ff, 0.3);
+  fill.position.set(-4, -2, 3);
+  scene.add(fill);
+}
+
+function onResize() {
+  if (!renderer) return;
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function loadCharacter() {
+  loadingOverlay.style.display = 'flex';
+  loadingText.textContent = 'character.glb を読み込み中...';
+
+  const loader = new THREE.GLTFLoader();
+  loader.load(
+    'character.glb',
+    (gltf) => {
+      templateGltf = gltf;
+      animNames = gltf.animations.length > 0
+        ? gltf.animations.map((a, i) => a.name || ('アニメ' + (i + 1)))
+        : ['(静止)'];
+
+      animRow.innerHTML = '';
+      animNames.forEach((name, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'anim-btn' + (idx === 0 ? ' active' : '');
+        btn.textContent = name;
+        btn.addEventListener('click', () => {
+          currentAnimIndex = idx;
+          document.querySelectorAll('.anim-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          placedObjects.forEach(obj => switchAnim(obj, idx));
+        });
+        animRow.appendChild(btn);
+      });
+
+      loadingOverlay.style.display = 'none';
+      hint.style.display = 'block';
+      bottomBar.style.display = 'flex';
+    },
+    (xhr) => {
+      if (xhr.total) {
+        loadingText.textContent = '読み込み中... ' + Math.round(xhr.loaded / xhr.total * 100) + '%';
+      }
+    },
+    (err) => {
+      loadingText.textContent = 'character.glb が見つかりません。同じフォルダに置いてください。';
+      loadingOverlay.style.display = 'flex';
+      console.error(err);
+    }
+  );
+}
+
+function cloneGltf(gltf) {
+  const clonedScene = gltf.scene.clone(true);
+
+  const srcSkins = [];
+  const dstSkins = [];
+  gltf.scene.traverse(n => { if (n.isSkinnedMesh) srcSkins.push(n); });
+  clonedScene.traverse(n => { if (n.isSkinnedMesh) dstSkins.push(n); });
+
+  const boneByName = {};
+  clonedScene.traverse(n => { if (n.isBone) boneByName[n.name] = n; });
+
+  dstSkins.forEach((dst, i) => {
+    const src = srcSkins[i];
+    const newBones = src.skeleton.bones.map(b => boneByName[b.name] || b);
+    dst.bind(new THREE.Skeleton(newBones, src.skeleton.boneInverses), dst.matrixWorld);
+  });
+
+  return { scene: clonedScene, animations: gltf.animations };
+}
+
+function switchAnim(obj, idx) {
+  if (!obj.mixer || obj.animations.length === 0) return;
+  obj.actions.forEach(a => a.fadeOut(0.3));
+  const clip = obj.animations[idx] || obj.animations[0];
+  const action = obj.mixer.clipAction(clip);
+  action.reset().fadeIn(0.3).play();
+  obj.actions = [action];
+}
+
+tapLayer.addEventListener('click', (e) => {
+  if (!running || !templateGltf) return;
+
+  const w = window.innerWidth, h = window.innerHeight;
+  const nx = (e.clientX / w) * 2 - 1;
+  const ny = -(e.clientY / h) * 2 + 1;
+
+  const clone = cloneGltf(templateGltf);
+  const model = clone.scene;
+  const s = parseFloat(scaleSlider.value);
+  model.scale.set(s, s, s);
+  model.position.set(nx * 4.5, ny * 3.5, -1 + (Math.random() - 0.5) * 0.5);
+
+  scene.add(model);
+
+  const mixer = new THREE.AnimationMixer(model);
+  const actions = [];
+  if (clone.animations.length > 0) {
+    const action = mixer.clipAction(clone.animations[currentAnimIndex] || clone.animations[0]);
+    action.play();
+    actions.push(action);
+  }
+
+  placedObjects.push({ model, mixer, animations: clone.animations, actions });
+  objBadge.textContent = placedObjects.length + '体';
+  showRipple(e.clientX, e.clientY);
+});
+
+tapLayer.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+
+function showRipple(cx, cy) {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;left:' + (cx-24) + 'px;top:' + (cy-24) + 'px;width:48px;height:48px;border-radius:50%;border:2px solid rgba(255,255,255,0.8);pointer-events:none;animation:rip 0.45s ease-out forwards;z-index:999;';
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 460);
+}
+
+clearBtn.addEventListener('click', () => {
+  placedObjects.forEach(o => scene.remove(o.model));
+  placedObjects = [];
+  objBadge.textContent = '0体';
+});
+
+shutter.addEventListener('click', () => {
+  flashEl.style.transition = 'opacity 0.05s';
+  flashEl.style.opacity = '0.85';
+  setTimeout(() => { flashEl.style.transition = 'opacity 0.4s'; flashEl.style.opacity = '0'; }, 60);
+
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  const w = window.innerWidth * dpr, h = window.innerHeight * dpr;
+  const comp = document.createElement('canvas');
+  comp.width = w; comp.height = h;
+  const ctx = comp.getContext('2d');
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const scale = Math.max(w / vw, h / vh);
+  const sw = w / scale, sh = h / scale;
+  ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, w, h);
+
+  renderer.render(scene, camera);
+  ctx.drawImage(arCanvas, 0, 0, w, h);
+
+  comp.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'ar_' + Date.now() + '.png'; a.click();
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock ? clock.getDelta() : 0.016;
+  placedObjects.forEach(o => o.mixer && o.mixer.update(delta));
+  if (renderer) renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
